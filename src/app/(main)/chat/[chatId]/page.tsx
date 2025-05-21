@@ -6,11 +6,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useAuth } from "@/hooks/useAuth";
-import { ArrowLeft, Paperclip, SendHorizonal, Smile, Mic, Phone, Video, Info, Loader2, Check, MessageSquareReply, X } from "lucide-react";
+import { ArrowLeft, Paperclip, SendHorizonal, Smile, Mic, Phone, Video, Info, Loader2, Check, MessageSquareReply, X, CheckCircle } from "lucide-react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import React, { useState, useEffect, useRef, FormEvent } from "react";
-import { db, auth, rtdb, databaseRef } from "@/lib/firebase"; 
+import { db, auth, rtdb, databaseRef } from "@/lib/firebase";
 import { onValue, off } from "firebase/database";
 import {
   doc,
@@ -24,11 +24,14 @@ import {
   Timestamp,
   updateDoc,
   arrayUnion,
-  Unsubscribe
+  Unsubscribe,
+  writeBatch
 } from "firebase/firestore";
 import type { User, ChatMessage, Chat } from "@/lib/types";
 import { formatRelativeTime } from "@/lib/utils";
 import { suggestReply, type SuggestReplyInput, type SuggestReplyOutput } from "@/ai/flows/suggest-reply";
+import { geminiChatBot, type GeminiChatBotInput, type GeminiChatBotOutput } from "@/ai/flows/gemini-chat-bot-flow";
+import { GEMINI_BOT_UID, GEMINI_BOT_NAME, GEMINI_BOT_AVATAR_URL } from "@/lib/constants";
 
 const NOTIFICATION_SETTINGS_KEY = 'gongoBongoNotificationSettings';
 
@@ -60,71 +63,62 @@ export default function IndividualChatPage() {
   const [replyingToMessage, setReplyingToMessage] = useState<ChatMessage | null>(null);
   const [aiSuggestions, setAiSuggestions] = useState<string[]>([]);
   const [loadingAiSuggestions, setLoadingAiSuggestions] = useState(false);
+  const [isBotChatting, setIsBotChatting] = useState(false); // For bot typing indicator
 
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const previousMessagesRef = useRef<ChatMessage[]>([]);
 
-
   useEffect(() => {
     if (messagesEndRef.current) {
-      messagesEndRef.current.scrollIntoView(); // Instant scroll to the bottom
+      messagesEndRef.current.scrollIntoView();
     }
   }, [messages]);
 
   useEffect(() => {
     if (!chatId || !currentUser?.uid) {
-        if (!currentUser?.uid && chatId) { 
-            setLoadingChat(false);
-        }
-        return;
+      if (!currentUser?.uid && chatId) {
+        setLoadingChat(false);
+      }
+      return;
     }
     setLoadingChat(true);
     const chatDocRef = doc(db, "chats", chatId);
-    let unsubscribePartnerFirestore: Unsubscribe | null = null; 
+    let unsubscribePartnerFirestore: Unsubscribe | null = null;
 
     const unsubscribeChatDetails = onSnapshot(chatDocRef, async (docSnap) => {
       if (docSnap.exists()) {
         const chatData = { id: docSnap.id, ...docSnap.data() } as Chat;
         setChatDetails(chatData);
 
-        if (!chatData.isGroup && chatData.participants && currentUser?.uid) {
-          const partnerId = chatData.participants.find(pId => pId !== currentUser.uid);
-          if (partnerId) {
-            const userDocRef = doc(db, "users", partnerId);
-             // Clean up previous listener if it exists and points to a different partner
-            if (unsubscribePartnerFirestore) {
-                unsubscribePartnerFirestore();
-                unsubscribePartnerFirestore = null;
-            }
-            unsubscribePartnerFirestore = onSnapshot(userDocRef, (userSnap) => {
-              if (userSnap.exists()) {
-                setChatPartner(userSnap.data() as User);
-              } else {
-                setChatPartner(null);
-              }
-            });
-          } else { // No partnerId found (e.g. chat with self, or inconsistent data)
-             if (unsubscribePartnerFirestore) {
-                unsubscribePartnerFirestore();
-                unsubscribePartnerFirestore = null;
-            }
-            setChatPartner(null);
+        const partnerId = chatData.participants.find(pId => pId !== currentUser.uid);
+        if (partnerId) {
+          const userDocRef = doc(db, "users", partnerId);
+          if (unsubscribePartnerFirestore) {
+            unsubscribePartnerFirestore();
+            unsubscribePartnerFirestore = null;
           }
-        } else if (chatData.isGroup) {
-           if (unsubscribePartnerFirestore) {
-                unsubscribePartnerFirestore();
-                unsubscribePartnerFirestore = null;
+          unsubscribePartnerFirestore = onSnapshot(userDocRef, (userSnap) => {
+            if (userSnap.exists()) {
+              setChatPartner(userSnap.data() as User);
+            } else {
+              setChatPartner(null);
             }
-          setChatPartner(null); 
+          });
+        } else {
+          if (unsubscribePartnerFirestore) {
+            unsubscribePartnerFirestore();
+            unsubscribePartnerFirestore = null;
+          }
+          setChatPartner(null);
         }
       } else {
         setChatDetails(null);
         setChatPartner(null);
         if (unsubscribePartnerFirestore) {
-            unsubscribePartnerFirestore();
-            unsubscribePartnerFirestore = null;
+          unsubscribePartnerFirestore();
+          unsubscribePartnerFirestore = null;
         }
       }
       setLoadingChat(false);
@@ -147,12 +141,14 @@ export default function IndividualChatPage() {
     };
   }, [chatId, currentUser?.uid]);
 
+  const isCurrentChatWithBot = chatPartner?.uid === GEMINI_BOT_UID;
+
   useEffect(() => {
-    if (!chatDetails || chatDetails.isGroup || !currentUser?.uid) {
+    if (!chatDetails || chatDetails.isGroup || !currentUser?.uid || isCurrentChatWithBot) {
       setRtdbPartnerStatus(null);
       return;
     }
-    
+
     const partnerId = chatDetails.participants.find(pId => pId !== currentUser.uid);
     if (!partnerId) {
       setRtdbPartnerStatus(null);
@@ -171,11 +167,11 @@ export default function IndividualChatPage() {
       setRtdbPartnerStatus(null);
     });
     return () => off(partnerStatusRtdbRef, 'value', listener);
-  }, [chatDetails, currentUser?.uid]);
+  }, [chatDetails, currentUser?.uid, isCurrentChatWithBot]);
 
 
   const fetchAiSuggestions = async (messageText: string) => {
-    if (!messageText.trim() || !currentUser) return;
+    if (!messageText.trim() || !currentUser || isCurrentChatWithBot) return; // No suggestions if bot chat
     setLoadingAiSuggestions(true);
     setAiSuggestions([]);
     try {
@@ -204,25 +200,23 @@ export default function IndividualChatPage() {
       console.error("Error fetching messages:", error);
     });
     return () => unsubscribeMessages();
-  }, [chatId, currentUser?.uid]); 
+  }, [chatId, currentUser?.uid]);
 
-  // Effect for handling notifications for new messages
   useEffect(() => {
-    if (!currentUser || !messages.length || !chatDetails) {
-      previousMessagesRef.current = [...messages]; // Keep ref updated even if no notification
+    if (!currentUser || !messages.length || !chatDetails || isCurrentChatWithBot) {
+      previousMessagesRef.current = [...messages];
       return;
     }
 
     const lastMessage = messages[messages.length - 1];
     const isInitialLoad = previousMessagesRef.current.length === 0 && messages.length > 0;
-    
-    const isNewMessageFromPartner = 
+
+    const isNewMessageFromPartner =
       lastMessage.senderId !== currentUser.uid &&
-      (!previousMessagesRef.current.find(msg => msg.id === lastMessage.id) || 
+      (!previousMessagesRef.current.find(msg => msg.id === lastMessage.id) ||
        (previousMessagesRef.current.length > 0 && messages.length > previousMessagesRef.current.length));
 
-
-    if (isNewMessageFromPartner && !isInitialLoad) {
+    if (isNewMessageFromPartner && !isInitialLoad && chatDetails.status === 'accepted') {
       if (document.hidden) {
         const notificationSettingsString = localStorage.getItem(NOTIFICATION_SETTINGS_KEY);
         if (notificationSettingsString) {
@@ -230,7 +224,7 @@ export default function IndividualChatPage() {
             const settings = JSON.parse(notificationSettingsString);
             const partnerName = chatDetails.isGroup ? chatDetails.groupName : (chatPartner?.displayName || "User");
             const senderDisplayName = lastMessage.senderDisplayName || partnerName;
-            const messageIcon = lastMessage.senderPhotoURL || (chatPartner?.photoURL) || '/logo-192.png'; 
+            const messageIcon = lastMessage.senderPhotoURL || (chatPartner?.photoURL) || '/logo-192.png';
 
             if (settings.desktopEnabled && Notification.permission === 'granted') {
               new Notification(senderDisplayName, {
@@ -252,12 +246,19 @@ export default function IndividualChatPage() {
       }
     }
     previousMessagesRef.current = [...messages];
-  }, [messages, currentUser, chatDetails, chatPartner]);
+  }, [messages, currentUser, chatDetails, chatPartner, isCurrentChatWithBot]);
 
 
   const handleSendMessage = async (e: FormEvent) => {
     e.preventDefault();
     if (newMessage.trim() === "" || !currentUser || !chatDetails) return;
+
+    const isRequestInitiator = chatDetails.status === 'pending' && chatDetails.initiatedBy === currentUser.uid;
+    const initiatorHasSentMessage = messages.some(msg => msg.senderId === currentUser.uid);
+    const canSendInitialRequestMessage = isRequestInitiator && !initiatorHasSentMessage;
+
+    if (chatDetails.status !== 'accepted' && !canSendInitialRequestMessage && !isCurrentChatWithBot) return;
+
     setSendingMessage(true);
 
     let replyData: Partial<ChatMessage> = {};
@@ -273,7 +274,7 @@ export default function IndividualChatPage() {
       text: newMessage,
       senderId: currentUser.uid,
       timestamp: serverTimestamp(),
-      status: 'sent', 
+      status: 'sent',
       senderPhotoURL: currentUser.photoURL || null,
       senderDisplayName: currentUser.displayName || currentUser.email || "User",
       ...replyData,
@@ -281,54 +282,121 @@ export default function IndividualChatPage() {
 
     try {
       const messagesColRef = collection(db, "chats", chatId, "messages");
-      await addDoc(messagesColRef, messageData);
-
       const chatDocRef = doc(db, "chats", chatId);
-      await updateDoc(chatDocRef, {
+
+      const batch = writeBatch(db);
+      const newMessageRef = doc(messagesColRef); // Pre-generate ID for the message
+      batch.set(newMessageRef, messageData);
+      batch.update(chatDocRef, {
         lastMessage: {
           text: newMessage,
           timestamp: serverTimestamp(),
           senderId: currentUser.uid,
         },
         updatedAt: serverTimestamp(),
-        participants: arrayUnion(currentUser.uid) 
       });
+      await batch.commit();
+
+      const userMessageText = newMessage; // Store before clearing
       setNewMessage("");
-      handleSetReplyingToMessage(null); // Clear reply mode & AI suggestions
+      handleSetReplyingToMessage(null);
+
+      if (isCurrentChatWithBot && chatPartner) {
+        setIsBotChatting(true);
+        try {
+          const botResponse = await geminiChatBot({ message: userMessageText });
+          const botMessageData: Omit<ChatMessage, "id"> = {
+            text: botResponse.response,
+            senderId: GEMINI_BOT_UID,
+            timestamp: serverTimestamp(),
+            status: 'sent', // Or 'delivered' if you prefer for bot messages
+            senderPhotoURL: chatPartner.photoURL || GEMINI_BOT_AVATAR_URL,
+            senderDisplayName: chatPartner.displayName || GEMINI_BOT_NAME,
+          };
+          const botMessageRef = doc(messagesColRef);
+          const botBatch = writeBatch(db);
+          botBatch.set(botMessageRef, botMessageData);
+          botBatch.update(chatDocRef, {
+            lastMessage: {
+              text: botResponse.response,
+              timestamp: serverTimestamp(),
+              senderId: GEMINI_BOT_UID,
+            },
+            updatedAt: serverTimestamp(),
+          });
+          await botBatch.commit();
+
+        } catch (botError) {
+          console.error("Error getting bot response:", botError);
+          // Optionally, send an error message from the bot to the chat
+          const errorBotMessage: Omit<ChatMessage, "id"> = {
+            text: "Sorry, I encountered an error. Please try again.",
+            senderId: GEMINI_BOT_UID,
+            timestamp: serverTimestamp(),
+            status: 'sent',
+            senderPhotoURL: chatPartner.photoURL || GEMINI_BOT_AVATAR_URL,
+            senderDisplayName: chatPartner.displayName || GEMINI_BOT_NAME,
+          };
+          await addDoc(messagesColRef, errorBotMessage);
+        } finally {
+          setIsBotChatting(false);
+        }
+      }
+
     } catch (error) {
       console.error("Error sending message: ", error);
+      toast({ title: "Error", description: "Could not send message.", variant: "destructive" });
     } finally {
       setSendingMessage(false);
     }
   };
 
+
   const handleSetReplyingToMessage = (message: ChatMessage | null) => {
     setReplyingToMessage(message);
-    if (message) {
-      fetchAiSuggestions(message.text); 
+    if (message && !isCurrentChatWithBot) { // No AI suggestions when replying in bot chat
+      fetchAiSuggestions(message.text);
       inputRef.current?.focus();
     } else {
-      setAiSuggestions([]); 
+      setAiSuggestions([]);
       setLoadingAiSuggestions(false);
     }
   };
-  
-  const partnerName = chatDetails?.isGroup ? chatDetails.groupName : (rtdbPartnerStatus?.displayName || chatPartner?.displayName);
-  const partnerAvatar = chatDetails?.isGroup ? chatDetails.groupAvatar : chatPartner?.photoURL;
-  const partnerDataAiHint = chatDetails?.isGroup ? "group avatar" : (chatPartner as any)?.dataAiHint || "person avatar";
-  
+
+  const handleAcceptRequest = async () => {
+    if (!chatDetails || !currentUser || chatDetails.initiatedBy === currentUser.uid) return;
+    setSendingMessage(true); // Use sendingMessage to disable buttons during action
+    try {
+      const chatDocRef = doc(db, "chats", chatId);
+      await updateDoc(chatDocRef, {
+        status: 'accepted',
+        updatedAt: serverTimestamp(),
+      });
+      setChatDetails(prev => prev ? { ...prev, status: 'accepted' } : null);
+    } catch (error) {
+      console.error("Error accepting chat request:", error);
+      toast({ title: "Error", description: "Could not accept request.", variant: "destructive" });
+    } finally {
+      setSendingMessage(false);
+    }
+  };
+
+  const partnerName = chatDetails?.isGroup ? chatDetails.groupName : (isCurrentChatWithBot ? chatPartner?.displayName || GEMINI_BOT_NAME : (rtdbPartnerStatus?.displayName || chatPartner?.displayName));
+  const partnerAvatar = chatDetails?.isGroup ? chatDetails.groupAvatar : (isCurrentChatWithBot ? chatPartner?.photoURL || GEMINI_BOT_AVATAR_URL : chatPartner?.photoURL);
+  const partnerDataAiHint = chatDetails?.isGroup ? "group avatar" : (isCurrentChatWithBot ? "robot bot" : (chatPartner as any)?.dataAiHint || "person avatar");
+
   const getPartnerStatus = () => {
-    if (chatDetails?.isGroup) return null;
+    if (chatDetails?.isGroup || isCurrentChatWithBot) return null; // No status for group or bot
     if (rtdbPartnerStatus) {
       if (rtdbPartnerStatus.isOnline) return <span className="text-xs text-green-500">Online</span>;
       if (rtdbPartnerStatus.lastSeen) return <span className="text-xs text-muted-foreground">Last seen {formatRelativeTime(rtdbPartnerStatus.lastSeen)}</span>;
     } else if (chatPartner) {
-      // Fallback to Firestore status if RTDB is not available for some reason
       if ((chatPartner as User).isOnline) return <span className="text-xs text-green-500">Online</span>;
       if ((chatPartner as User).lastSeen) return <span className="text-xs text-muted-foreground">Last seen {formatRelativeTime((chatPartner as User).lastSeen!)}</span>;
     }
     return <span className="text-xs text-muted-foreground">Offline</span>;
   };
+
 
   if (loadingChat) {
     return (
@@ -340,7 +408,7 @@ export default function IndividualChatPage() {
   }
 
   if (!chatDetails) {
-     return (
+    return (
       <div className="flex flex-col h-full items-center justify-center p-4 text-center">
         <Info className="h-12 w-12 text-destructive mb-4" />
         <h2 className="text-xl font-semibold mb-2">Chat not found</h2>
@@ -349,6 +417,16 @@ export default function IndividualChatPage() {
       </div>
     );
   }
+
+  const isRequestRecipient = chatDetails.status === 'pending' && chatDetails.initiatedBy !== currentUser?.uid && !isCurrentChatWithBot;
+  const isRequestInitiator = chatDetails.status === 'pending' && chatDetails.initiatedBy === currentUser?.uid && !isCurrentChatWithBot;
+  const isChatAccepted = chatDetails.status === 'accepted' || isCurrentChatWithBot; // Bot chats are always "accepted"
+
+  const initiatorHasSentInitialMessage = isRequestInitiator && messages.some(msg => msg.senderId === currentUser?.uid);
+
+  const showMessageInput = isChatAccepted || (isRequestInitiator && !initiatorHasSentInitialMessage);
+  const inputPlaceholder = (isRequestInitiator && !initiatorHasSentInitialMessage) ? "Send an invitation message..." : "Type a message...";
+
 
   return (
     <div className="flex flex-col h-full bg-background">
@@ -365,8 +443,8 @@ export default function IndividualChatPage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-primary"><Phone className="h-5 w-5" /></Button>
-          <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-primary"><Video className="h-5 w-5" /></Button>
+          <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-primary" disabled={!isChatAccepted || isCurrentChatWithBot}><Phone className="h-5 w-5" /></Button>
+          <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-primary" disabled={!isChatAccepted || isCurrentChatWithBot}><Video className="h-5 w-5" /></Button>
           <Button variant="ghost" size="icon" className="text-muted-foreground hover:text-primary"><Info className="h-5 w-5" /></Button>
         </div>
       </header>
@@ -376,12 +454,12 @@ export default function IndividualChatPage() {
           {messages.map((msg) => (
             <div
               key={msg.id}
-              className={`flex items-end gap-2 group ${ 
+              className={`flex items-end gap-2 group ${
                 msg.senderId === currentUser?.uid ? "justify-end" : "justify-start"
               }`}
             >
               {msg.senderId !== currentUser?.uid && (
-                <CustomAvatar src={msg.senderPhotoURL} alt={msg.senderDisplayName || "Sender"} fallback={msg.senderDisplayName?.charAt(0) || "S"} className="h-8 w-8" data-ai-hint="person avatar"/>
+                <CustomAvatar src={msg.senderPhotoURL} alt={msg.senderDisplayName || "Sender"} fallback={msg.senderDisplayName?.charAt(0) || "S"} className="h-8 w-8" data-ai-hint={msg.senderId === GEMINI_BOT_UID ? "robot bot" : "person avatar"}/>
               )}
               <div className={`flex items-center gap-2 ${msg.senderId === currentUser?.uid ? 'flex-row-reverse' : 'flex-row'}`}>
                 <div
@@ -423,20 +501,22 @@ export default function IndividualChatPage() {
                       )}
                   </div>
                 </div>
-                <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-primary"
-                    onClick={() => handleSetReplyingToMessage(msg)}
-                    aria-label="Reply to message"
-                >
-                    <MessageSquareReply className="h-4 w-4" />
-                </Button>
+                {isChatAccepted && !isCurrentChatWithBot && ( // Only show reply button for accepted non-bot chats
+                    <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-primary"
+                        onClick={() => handleSetReplyingToMessage(msg)}
+                        aria-label="Reply to message"
+                    >
+                        <MessageSquareReply className="h-4 w-4" />
+                    </Button>
+                )}
               </div>
               {msg.senderId === currentUser?.uid && currentUser && (
-                  <CustomAvatar 
-                    src={currentUser.photoURL} 
-                    alt={currentUser.displayName || "You"} 
+                  <CustomAvatar
+                    src={currentUser.photoURL}
+                    alt={currentUser.displayName || "You"}
                     fallback={(currentUser.displayName || currentUser.email || "Y").charAt(0)}
                     className="h-8 w-8"
                     data-ai-hint="person avatar"
@@ -444,91 +524,118 @@ export default function IndividualChatPage() {
                 )}
             </div>
           ))}
+          {isBotChatting && (
+            <div className="flex items-end gap-2 justify-start">
+              <CustomAvatar src={chatPartner?.photoURL || GEMINI_BOT_AVATAR_URL} alt={GEMINI_BOT_NAME} fallback={GEMINI_BOT_NAME.charAt(0)} className="h-8 w-8" data-ai-hint="robot bot"/>
+              <div className="bg-card text-card-foreground rounded-xl rounded-br-none border p-3 shadow">
+                <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+              </div>
+            </div>
+          )}
           <div ref={messagesEndRef} />
         </div>
       </ScrollArea>
-      
+
       <footer className="border-t bg-card">
-        {replyingToMessage && currentUser && (
-          <div className="p-2.5 border-b bg-background/80 flex justify-between items-center">
-            <div className="overflow-hidden flex-1 min-w-0">
-              <p className="text-xs font-semibold text-primary">
-                Replying to {replyingToMessage.senderId === currentUser?.uid ? "yourself" : (replyingToMessage.senderDisplayName || "User")}
-              </p>
-              <p className="text-sm text-muted-foreground truncate">
-                {replyingToMessage.text}
-              </p>
-            </div>
-            <Button variant="ghost" size="icon" onClick={() => handleSetReplyingToMessage(null)} className="text-muted-foreground hover:text-destructive">
-              <X className="h-4 w-4" />
+        {isRequestRecipient ? (
+          <div className="p-4 flex flex-col sm:flex-row items-center justify-center gap-3 bg-background/80">
+            <p className="text-sm text-foreground text-center sm:text-left">
+              <span className="font-semibold">{chatPartner?.displayName || "User"}</span> has sent you a chat request.
+            </p>
+            <Button onClick={handleAcceptRequest} disabled={sendingMessage} className="w-full sm:w-auto">
+              {sendingMessage && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Accept Invitation
             </Button>
           </div>
-        )}
-         {(aiSuggestions.length > 0 && !loadingAiSuggestions) && (
-          <div className="p-2 flex flex-wrap gap-2 border-b items-center">
-            <p className="text-xs text-muted-foreground mr-2">Suggestions:</p>
-            {aiSuggestions.map((suggestion, index) => (
-            <Button
-                key={index}
-                variant="outline"
-                size="sm"
-                className="text-xs h-auto py-1 px-2"
-                onClick={() => {
-                  setNewMessage(suggestion);
-                  setAiSuggestions([]); 
-                  inputRef.current?.focus();
-                }}
-            >
-                {suggestion}
-            </Button>
-            ))}
+        ) : (isRequestInitiator && initiatorHasSentInitialMessage) ? (
+           <div className="p-3 text-center text-sm text-muted-foreground bg-background/80">
+            Invitation sent. Waiting for {partnerName || "user"} to accept.
           </div>
+        ) : (
+          showMessageInput && (
+            <>
+              {replyingToMessage && currentUser && !isCurrentChatWithBot && (
+                <div className="p-2.5 border-b bg-background/80 flex justify-between items-center">
+                  <div className="overflow-hidden flex-1 min-w-0">
+                    <p className="text-xs font-semibold text-primary">
+                      Replying to {replyingToMessage.senderId === currentUser?.uid ? "yourself" : (replyingToMessage.senderDisplayName || "User")}
+                    </p>
+                    <p className="text-sm text-muted-foreground truncate">
+                      {replyingToMessage.text}
+                    </p>
+                  </div>
+                  <Button variant="ghost" size="icon" onClick={() => handleSetReplyingToMessage(null)} className="text-muted-foreground hover:text-destructive">
+                    <X className="h-4 w-4" />
+                  </Button>
+                </div>
+              )}
+              {(aiSuggestions.length > 0 && !loadingAiSuggestions && !isCurrentChatWithBot) && (
+                <div className="p-2 flex flex-wrap gap-2 border-b items-center">
+                  <p className="text-xs text-muted-foreground mr-2">Suggestions:</p>
+                  {aiSuggestions.map((suggestion, index) => (
+                  <Button
+                      key={index}
+                      variant="outline"
+                      size="sm"
+                      className="text-xs h-auto py-1 px-2"
+                      onClick={() => {
+                        setNewMessage(suggestion);
+                        setAiSuggestions([]);
+                        inputRef.current?.focus();
+                      }}
+                  >
+                      {suggestion}
+                  </Button>
+                  ))}
+                </div>
+              )}
+              {loadingAiSuggestions && !isCurrentChatWithBot && (
+                  <div className="p-2 flex justify-center items-center border-b">
+                      <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                      <span className="ml-2 text-xs text-muted-foreground">Getting AI suggestions...</span>
+                  </div>
+              )}
+              <form onSubmit={handleSendMessage} className="flex items-center gap-2 p-3">
+                <Button type="button" variant="ghost" size="icon" className="text-muted-foreground hover:text-primary" disabled={sendingMessage}>
+                  <Smile className="h-5 w-5" />
+                </Button>
+                <Button type="button" variant="ghost" size="icon" className="text-muted-foreground hover:text-primary" disabled={sendingMessage || isCurrentChatWithBot}>
+                  <Paperclip className="h-5 w-5" />
+                </Button>
+                <Input
+                  ref={inputRef}
+                  type="text"
+                  placeholder={inputPlaceholder}
+                  value={newMessage}
+                  onChange={(e) => {
+                      setNewMessage(e.target.value);
+                      if (e.target.value.trim() !== '' && aiSuggestions.length > 0) {
+                          if (!aiSuggestions.some(suggestion => e.target.value.startsWith(suggestion))) {
+                              setAiSuggestions([]);
+                          }
+                      }
+                  }}
+                  className="flex-1 bg-background focus:bg-background/90"
+                  autoComplete="off"
+                  disabled={sendingMessage}
+                />
+                {newMessage.trim() && !sendingMessage ? (
+                  <Button type="submit" size="icon" className="bg-primary hover:bg-primary/90">
+                    <SendHorizonal className="h-5 w-5 text-primary-foreground" />
+                  </Button>
+                ) : sendingMessage ? (
+                  <Button type="button" size="icon" className="bg-primary hover:bg-primary/90" disabled>
+                      <Loader2 className="h-5 w-5 animate-spin text-primary-foreground" />
+                  </Button>
+                ) : (
+                  <Button type="button" variant="ghost" size="icon" className="text-muted-foreground hover:text-primary" disabled={sendingMessage || isCurrentChatWithBot}>
+                    <Mic className="h-5 w-5" />
+                  </Button>
+                )}
+              </form>
+            </>
+          )
         )}
-        {loadingAiSuggestions && (
-            <div className="p-2 flex justify-center items-center border-b">
-                <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-                <span className="ml-2 text-xs text-muted-foreground">Getting AI suggestions...</span>
-            </div>
-        )}
-        <form onSubmit={handleSendMessage} className="flex items-center gap-2 p-3">
-          <Button type="button" variant="ghost" size="icon" className="text-muted-foreground hover:text-primary">
-            <Smile className="h-5 w-5" />
-          </Button>
-          <Button type="button" variant="ghost" size="icon" className="text-muted-foreground hover:text-primary">
-            <Paperclip className="h-5 w-5" />
-          </Button>
-          <Input
-            ref={inputRef}
-            type="text"
-            placeholder="Type a message..."
-            value={newMessage}
-            onChange={(e) => {
-                setNewMessage(e.target.value);
-                if (e.target.value.trim() !== '' && aiSuggestions.length > 0) {
-                    // Clear suggestions if the typed message no longer starts with any suggestion
-                    if (!aiSuggestions.some(suggestion => e.target.value.startsWith(suggestion))) {
-                         setAiSuggestions([]);
-                    }
-                }
-            }}
-            className="flex-1 bg-background focus:bg-background/90"
-            autoComplete="off"
-            disabled={sendingMessage}
-          />
-          {newMessage.trim() && !sendingMessage ? (
-            <Button type="submit" size="icon" className="bg-primary hover:bg-primary/90">
-              <SendHorizonal className="h-5 w-5 text-primary-foreground" />
-            </Button>
-          ) : sendingMessage ? (
-            <Button type="button" size="icon" className="bg-primary hover:bg-primary/90" disabled>
-                <Loader2 className="h-5 w-5 animate-spin text-primary-foreground" />
-            </Button>
-          ) : (
-            <Button type="button" variant="ghost" size="icon" className="text-muted-foreground hover:text-primary">
-              <Mic className="h-5 w-5" />
-            </Button>
-          )}
-        </form>
       </footer>
     </div>
   );
