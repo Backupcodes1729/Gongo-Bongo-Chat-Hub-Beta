@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useAuth } from "@/hooks/useAuth";
-import { ArrowLeft, Paperclip, SendHorizonal, Smile, Mic, Phone, Video, Info, Loader2, Check, MessageSquareReply, X, CheckCircle } from "lucide-react";
+import { ArrowLeft, Paperclip, SendHorizonal, Smile, Mic, Phone, Video, Info, Loader2, Check, MessageSquareReply, X, CheckCircle, XCircle } from "lucide-react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import React, { useState, useEffect, useRef, FormEvent } from "react";
@@ -23,12 +23,11 @@ import {
   serverTimestamp,
   Timestamp,
   updateDoc,
-  arrayUnion,
-  Unsubscribe,
   writeBatch
 } from "firebase/firestore";
 import type { User, ChatMessage, Chat } from "@/lib/types";
 import { formatRelativeTime } from "@/lib/utils";
+import { useToast } from "@/hooks/use-toast";
 import { suggestReply, type SuggestReplyInput, type SuggestReplyOutput } from "@/ai/flows/suggest-reply";
 import { geminiChatBot, type GeminiChatBotInput, type GeminiChatBotOutput } from "@/ai/flows/gemini-chat-bot-flow";
 import { GEMINI_BOT_UID, GEMINI_BOT_NAME, GEMINI_BOT_AVATAR_URL } from "@/lib/constants";
@@ -50,6 +49,7 @@ interface RtdbUserStatus {
 export default function IndividualChatPage() {
   const params = useParams();
   const router = useRouter();
+  const { toast } = useToast();
   const chatId = params.chatId as string;
   const { user: currentUser } = useAuth();
 
@@ -76,6 +76,8 @@ export default function IndividualChatPage() {
     }
   }, [messages]);
 
+  const isCurrentChatWithBot = chatPartner?.uid === GEMINI_BOT_UID;
+
   useEffect(() => {
     if (!chatId || !currentUser?.uid) {
       if (!currentUser?.uid && chatId) {
@@ -96,7 +98,7 @@ export default function IndividualChatPage() {
         if (partnerId) {
           const userDocRef = doc(db, "users", partnerId);
           if (unsubscribePartnerFirestore) {
-            unsubscribePartnerFirestore();
+            unsubscribePartnerFirestore(); // Clean up previous listener
             unsubscribePartnerFirestore = null;
           }
           unsubscribePartnerFirestore = onSnapshot(userDocRef, (userSnap) => {
@@ -105,9 +107,10 @@ export default function IndividualChatPage() {
             } else {
               setChatPartner(null);
             }
+             // setLoadingChat(false) should ideally be called after all initial data is potentially fetched
           });
         } else {
-          if (unsubscribePartnerFirestore) {
+           if (unsubscribePartnerFirestore) {
             unsubscribePartnerFirestore();
             unsubscribePartnerFirestore = null;
           }
@@ -121,7 +124,7 @@ export default function IndividualChatPage() {
           unsubscribePartnerFirestore = null;
         }
       }
-      setLoadingChat(false);
+      setLoadingChat(false); // Moved here to ensure it's called after initial chat details are processed
     }, (error) => {
       console.error("Error fetching chat details (Firestore):", error);
       setChatDetails(null);
@@ -141,7 +144,6 @@ export default function IndividualChatPage() {
     };
   }, [chatId, currentUser?.uid]);
 
-  const isCurrentChatWithBot = chatPartner?.uid === GEMINI_BOT_UID;
 
   useEffect(() => {
     if (!chatDetails || chatDetails.isGroup || !currentUser?.uid || isCurrentChatWithBot) {
@@ -171,7 +173,7 @@ export default function IndividualChatPage() {
 
 
   const fetchAiSuggestions = async (messageText: string) => {
-    if (!messageText.trim() || !currentUser || isCurrentChatWithBot) return; // No suggestions if bot chat
+    if (!messageText.trim() || !currentUser ) return;
     setLoadingAiSuggestions(true);
     setAiSuggestions([]);
     try {
@@ -203,7 +205,7 @@ export default function IndividualChatPage() {
   }, [chatId, currentUser?.uid]);
 
   useEffect(() => {
-    if (!currentUser || !messages.length || !chatDetails || isCurrentChatWithBot) {
+    if (!currentUser || !messages.length || !chatDetails ) { // Removed isCurrentChatWithBot condition here
       previousMessagesRef.current = [...messages];
       return;
     }
@@ -222,9 +224,10 @@ export default function IndividualChatPage() {
         if (notificationSettingsString) {
           try {
             const settings = JSON.parse(notificationSettingsString);
-            const partnerName = chatDetails.isGroup ? chatDetails.groupName : (chatPartner?.displayName || "User");
-            const senderDisplayName = lastMessage.senderDisplayName || partnerName;
-            const messageIcon = lastMessage.senderPhotoURL || (chatPartner?.photoURL) || '/logo-192.png';
+            const partnerNameForNotif = chatDetails.isGroup ? chatDetails.groupName : (isCurrentChatWithBot ? GEMINI_BOT_NAME : (chatPartner?.displayName || "User"));
+            const senderDisplayName = lastMessage.senderDisplayName || partnerNameForNotif;
+            const messageIcon = lastMessage.senderPhotoURL || (isCurrentChatWithBot ? GEMINI_BOT_AVATAR_URL : chatPartner?.photoURL) || '/logo-192.png';
+
 
             if (settings.desktopEnabled && Notification.permission === 'granted') {
               new Notification(senderDisplayName, {
@@ -285,7 +288,7 @@ export default function IndividualChatPage() {
       const chatDocRef = doc(db, "chats", chatId);
 
       const batch = writeBatch(db);
-      const newMessageRef = doc(messagesColRef); // Pre-generate ID for the message
+      const newMessageRef = doc(messagesColRef); 
       batch.set(newMessageRef, messageData);
       batch.update(chatDocRef, {
         lastMessage: {
@@ -297,9 +300,9 @@ export default function IndividualChatPage() {
       });
       await batch.commit();
 
-      const userMessageText = newMessage; // Store before clearing
+      const userMessageText = newMessage; 
       setNewMessage("");
-      handleSetReplyingToMessage(null);
+      handleSetReplyingToMessage(null); // Clear reply state and suggestions
 
       if (isCurrentChatWithBot && chatPartner) {
         setIsBotChatting(true);
@@ -309,7 +312,7 @@ export default function IndividualChatPage() {
             text: botResponse.response,
             senderId: GEMINI_BOT_UID,
             timestamp: serverTimestamp(),
-            status: 'sent', // Or 'delivered' if you prefer for bot messages
+            status: 'sent', 
             senderPhotoURL: chatPartner.photoURL || GEMINI_BOT_AVATAR_URL,
             senderDisplayName: chatPartner.displayName || GEMINI_BOT_NAME,
           };
@@ -328,7 +331,6 @@ export default function IndividualChatPage() {
 
         } catch (botError) {
           console.error("Error getting bot response:", botError);
-          // Optionally, send an error message from the bot to the chat
           const errorBotMessage: Omit<ChatMessage, "id"> = {
             text: "Sorry, I encountered an error. Please try again.",
             senderId: GEMINI_BOT_UID,
@@ -354,7 +356,7 @@ export default function IndividualChatPage() {
 
   const handleSetReplyingToMessage = (message: ChatMessage | null) => {
     setReplyingToMessage(message);
-    if (message && !isCurrentChatWithBot) { // No AI suggestions when replying in bot chat
+    if (message) { // Fetch AI suggestions if a message is selected for reply, regardless of bot chat
       fetchAiSuggestions(message.text);
       inputRef.current?.focus();
     } else {
@@ -365,7 +367,7 @@ export default function IndividualChatPage() {
 
   const handleAcceptRequest = async () => {
     if (!chatDetails || !currentUser || chatDetails.initiatedBy === currentUser.uid) return;
-    setSendingMessage(true); // Use sendingMessage to disable buttons during action
+    setSendingMessage(true);
     try {
       const chatDocRef = doc(db, "chats", chatId);
       await updateDoc(chatDocRef, {
@@ -386,7 +388,8 @@ export default function IndividualChatPage() {
   const partnerDataAiHint = chatDetails?.isGroup ? "group avatar" : (isCurrentChatWithBot ? "robot bot" : (chatPartner as any)?.dataAiHint || "person avatar");
 
   const getPartnerStatus = () => {
-    if (chatDetails?.isGroup || isCurrentChatWithBot) return null; // No status for group or bot
+    if (isCurrentChatWithBot) return <span className="text-xs text-green-500">Online</span>;
+    if (chatDetails?.isGroup) return null;
     if (rtdbPartnerStatus) {
       if (rtdbPartnerStatus.isOnline) return <span className="text-xs text-green-500">Online</span>;
       if (rtdbPartnerStatus.lastSeen) return <span className="text-xs text-muted-foreground">Last seen {formatRelativeTime(rtdbPartnerStatus.lastSeen)}</span>;
@@ -420,10 +423,9 @@ export default function IndividualChatPage() {
 
   const isRequestRecipient = chatDetails.status === 'pending' && chatDetails.initiatedBy !== currentUser?.uid && !isCurrentChatWithBot;
   const isRequestInitiator = chatDetails.status === 'pending' && chatDetails.initiatedBy === currentUser?.uid && !isCurrentChatWithBot;
-  const isChatAccepted = chatDetails.status === 'accepted' || isCurrentChatWithBot; // Bot chats are always "accepted"
+  const isChatAccepted = chatDetails.status === 'accepted' || isCurrentChatWithBot; 
 
   const initiatorHasSentInitialMessage = isRequestInitiator && messages.some(msg => msg.senderId === currentUser?.uid);
-
   const showMessageInput = isChatAccepted || (isRequestInitiator && !initiatorHasSentInitialMessage);
   const inputPlaceholder = (isRequestInitiator && !initiatorHasSentInitialMessage) ? "Send an invitation message..." : "Type a message...";
 
@@ -501,7 +503,7 @@ export default function IndividualChatPage() {
                       )}
                   </div>
                 </div>
-                {isChatAccepted && !isCurrentChatWithBot && ( // Only show reply button for accepted non-bot chats
+                {isChatAccepted && ( 
                     <Button
                         variant="ghost"
                         size="icon"
@@ -554,7 +556,7 @@ export default function IndividualChatPage() {
         ) : (
           showMessageInput && (
             <>
-              {replyingToMessage && currentUser && !isCurrentChatWithBot && (
+              {replyingToMessage && currentUser && (
                 <div className="p-2.5 border-b bg-background/80 flex justify-between items-center">
                   <div className="overflow-hidden flex-1 min-w-0">
                     <p className="text-xs font-semibold text-primary">
@@ -569,7 +571,7 @@ export default function IndividualChatPage() {
                   </Button>
                 </div>
               )}
-              {(aiSuggestions.length > 0 && !loadingAiSuggestions && !isCurrentChatWithBot) && (
+              {(aiSuggestions.length > 0 && !loadingAiSuggestions) && (
                 <div className="p-2 flex flex-wrap gap-2 border-b items-center">
                   <p className="text-xs text-muted-foreground mr-2">Suggestions:</p>
                   {aiSuggestions.map((suggestion, index) => (
@@ -589,7 +591,7 @@ export default function IndividualChatPage() {
                   ))}
                 </div>
               )}
-              {loadingAiSuggestions && !isCurrentChatWithBot && (
+              {loadingAiSuggestions && (
                   <div className="p-2 flex justify-center items-center border-b">
                       <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
                       <span className="ml-2 text-xs text-muted-foreground">Getting AI suggestions...</span>
@@ -640,3 +642,4 @@ export default function IndividualChatPage() {
     </div>
   );
 }
+
