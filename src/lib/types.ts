@@ -8,6 +8,7 @@ export interface User extends FirebaseUser {
   dataAiHint?: string; // Optional hint for AI image generation for user avatar
   isOnline?: boolean;
   lastSeen?: Timestamp | number; // Can be Firestore Timestamp or RTDB number
+  isBot?: boolean; // To identify bot users
 }
 
 export interface ChatMessage {
@@ -39,6 +40,8 @@ export interface Chat {
     senderId: string;
   } | null; // Can be null if no messages or chat just created
   updatedAt: Timestamp | FieldValue; // For serverTimestamp on write, Timestamp on read
+  status: 'pending' | 'accepted' | 'declined'; // Chat request status
+  initiatedBy?: string; // UID of the user who initiated the chat (for requests)
   isGroup?: boolean;
   groupName?: string;
   groupAvatar?: string | null;
@@ -46,3 +49,5 @@ export interface Chat {
   createdBy?: string; // UID of user who created the group chat
   createdAt?: Timestamp | FieldValue; // For serverTimestamp on write, Timestamp on read
 }
+
+    
