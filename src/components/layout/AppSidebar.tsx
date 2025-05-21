@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { CustomAvatar } from "@/components/common/CustomAvatar";
-import { PlusCircle, Search, MessageSquare, Users, Settings, Loader2 } from "lucide-react";
+import { PlusCircle, Search, MessageSquare, Users, Settings, Loader2, Inbox } from "lucide-react"; // Added Inbox
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
@@ -14,6 +14,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { db } from "@/lib/firebase";
 import { collection, query, where, orderBy, onSnapshot, doc, getDoc, Timestamp } from "firebase/firestore";
 import type { Chat, User as AppUser } from "@/lib/types";
+import { Badge } from "@/components/ui/badge"; // Added Badge
 
 interface SidebarChatItem {
   id: string; // Chat ID
@@ -33,7 +34,8 @@ interface SidebarNavLinkProps {
 
 function SidebarNavLink({ href, children, icon: Icon }: SidebarNavLinkProps) {
   const pathname = usePathname();
-  const isActive = pathname === href || (href === "/chat" && pathname.startsWith("/chat/"));
+  const isActive = pathname === href || (href === "/chat" && pathname.startsWith("/chat/")) || (href === "/chat/requests" && pathname === "/chat/requests");
+
 
   return (
     <Link
@@ -53,6 +55,7 @@ export function AppSidebar() {
   const pathname = usePathname();
   const { user: currentUser } = useAuth();
   const [sidebarChats, setSidebarChats] = useState<SidebarChatItem[]>([]);
+  const [pendingRequestsCount, setPendingRequestsCount] = useState(0);
   const [loadingChats, setLoadingChats] = useState(true);
   const chatItemRefs = useRef<Record<string, HTMLAnchorElement | null>>({});
 
@@ -60,6 +63,7 @@ export function AppSidebar() {
     if (!currentUser) {
       setLoadingChats(false);
       setSidebarChats([]);
+      setPendingRequestsCount(0);
       return;
     }
 
@@ -72,7 +76,9 @@ export function AppSidebar() {
     );
 
     const unsubscribe = onSnapshot(q, async (querySnapshot) => {
-      const fetchedChats: SidebarChatItem[] = [];
+      const yourChatsList: SidebarChatItem[] = [];
+      const incomingRequestsList: SidebarChatItem[] = [];
+      
       const otherParticipantIds: string[] = [];
       const chatDocs = querySnapshot.docs;
 
@@ -88,7 +94,6 @@ export function AppSidebar() {
       
       const usersDataMap = new Map<string, AppUser>();
       if (otherParticipantIds.length > 0) {
-        // Batch fetch user documents for efficiency if many chats
         const userDocsPromises = otherParticipantIds.map(id => getDoc(doc(db, "users", id)));
         const userDocsSnapshots = await Promise.all(userDocsPromises);
         userDocsSnapshots.forEach(userDocSnap => {
@@ -117,7 +122,7 @@ export function AppSidebar() {
             if (otherParticipantUser) {
               displayName = otherParticipantUser.displayName || "User";
               displayAvatar = otherParticipantUser.photoURL || null;
-              dataAiHint = otherParticipantUser.dataAiHint || "person avatar";
+              dataAiHint = otherParticipantUser.dataAiHint || (otherParticipantUser.isBot ? "robot bot" : "person avatar");
             } else {
               displayName = "Loading User..."; 
             }
@@ -129,7 +134,7 @@ export function AppSidebar() {
             lastMessageText = lastMessageText.substring(0, 27) + "...";
         }
 
-        fetchedChats.push({
+        const chatItem: SidebarChatItem = {
           id: chatData.id,
           displayName,
           displayAvatar,
@@ -137,19 +142,30 @@ export function AppSidebar() {
           lastMessageTimestamp: chatData.lastMessage?.timestamp || chatData.updatedAt,
           isActive: pathname === `/chat/${chatData.id}`,
           dataAiHint,
-        });
+        };
+
+        // Categorize chats
+        if (chatData.status === 'accepted') {
+          yourChatsList.push(chatItem);
+        } else if (chatData.status === 'pending' && chatData.initiatedBy !== currentUser.uid) {
+          incomingRequestsList.push(chatItem); // These go to the requests page/badge
+        }
+        // Pending chats initiated by the current user are currently not displayed in "Your Chats"
+        // or counted in "Requests". They are "sent requests".
       }
       
-      fetchedChats.sort((a, b) => {
+      // Sort accepted chats by last message timestamp
+      yourChatsList.sort((a, b) => {
         const timeA = a.lastMessageTimestamp?.seconds || 0;
         const timeB = b.lastMessageTimestamp?.seconds || 0;
         return timeB - timeA;
       });
 
-      setSidebarChats(fetchedChats);
+      setSidebarChats(yourChatsList);
+      setPendingRequestsCount(incomingRequestsList.length);
       setLoadingChats(false);
     }, (error) => {
-      console.error("Error fetching chats:", error);
+      console.error("Error fetching chats for sidebar:", error);
       setLoadingChats(false);
     });
 
@@ -165,7 +181,7 @@ export function AppSidebar() {
         block: 'nearest',
       });
     }
-  }, [pathname, sidebarChats]); // Rerun when active chat changes or chat list updates
+  }, [pathname, sidebarChats]);
 
   return (
     <aside className="hidden md:flex flex-col w-72 border-r bg-sidebar text-sidebar-foreground">
@@ -185,6 +201,14 @@ export function AppSidebar() {
           <SidebarNavLink href="/contacts" icon={Users}>
             Contacts
           </SidebarNavLink>
+          <SidebarNavLink href="/chat/requests" icon={Inbox}>
+            Requests
+            {pendingRequestsCount > 0 && (
+              <Badge variant="destructive" className="ml-auto flex h-5 w-5 shrink-0 items-center justify-center rounded-full">
+                {pendingRequestsCount}
+              </Badge>
+            )}
+          </SidebarNavLink>
         </nav>
 
         <div className="mt-4 px-1">
@@ -194,7 +218,7 @@ export function AppSidebar() {
               <Loader2 className="h-6 w-6 animate-spin text-primary" />
             </div>
           ) : sidebarChats.length === 0 && currentUser ? (
-            <p className="p-2 text-sm text-muted-foreground">No chats yet. Start a new conversation!</p>
+            <p className="p-2 text-sm text-muted-foreground">No active chats. Start a new conversation or check your requests!</p>
           ) : !currentUser && !loadingChats ? (
              <p className="p-2 text-sm text-muted-foreground">Login to see your chats.</p>
           ) : (
@@ -202,7 +226,7 @@ export function AppSidebar() {
               <Link
                 href={`/chat/${chat.id}`}
                 key={chat.id}
-                ref={(el: HTMLAnchorElement | null) => (chatItemRefs.current[chat.id] = el)}
+                ref={(el) => (chatItemRefs.current[chat.id] = el)}
                 className={cn(
                   "flex items-center gap-3 rounded-md p-2 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
                   chat.isActive && "bg-sidebar-accent text-sidebar-accent-foreground font-medium"
@@ -239,4 +263,4 @@ export function AppSidebar() {
     </aside>
   );
 }
-
+    
