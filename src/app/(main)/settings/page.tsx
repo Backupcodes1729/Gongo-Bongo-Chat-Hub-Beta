@@ -2,8 +2,8 @@
 // This is now a client component
 "use client";
 
-import React, { useState, useEffect } from 'react';
-import { Settings as SettingsIcon, User, Bell, Lock, Palette, Sun, Moon } from "lucide-react";
+import React, { useState, useEffect, FormEvent } from 'react';
+import { Settings as SettingsIcon, User, Bell, Lock, Palette, Sun, Moon, Loader2 } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -12,6 +12,9 @@ import { Switch } from "@/components/ui/switch";
 import { CustomAvatar } from "@/components/common/CustomAvatar";
 import { useAuth } from '@/hooks/useAuth';
 import { useToast } from '@/hooks/use-toast';
+import { auth, db } from '@/lib/firebase'; // Import auth and db
+import { updateProfile, updateEmail } from 'firebase/auth';
+import { doc, updateDoc } from 'firebase/firestore';
 
 const NOTIFICATION_SETTINGS_KEY = 'gongoBongoNotificationSettings';
 
@@ -22,19 +25,25 @@ interface NotificationSettings {
 }
 
 export default function SettingsPage() {
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const { toast } = useToast();
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
   const [isMounted, setIsMounted] = useState(false);
 
+  const [currentDisplayName, setCurrentDisplayName] = useState("");
+  const [currentEmail, setCurrentEmail] = useState("");
+  const [currentPhotoURL, setCurrentPhotoURL] = useState("");
+  const [isEditingPhoto, setIsEditingPhoto] = useState(false);
+  const [isSavingProfile, setIsSavingProfile] = useState(false);
+
+
   const [notificationSettings, setNotificationSettings] = useState<NotificationSettings>({
     desktopEnabled: false,
     emailEnabled: false,
-    soundEnabled: true, // Default sound to true as per image
+    soundEnabled: true,
   });
   const [desktopNotificationPermission, setDesktopNotificationPermission] = useState<NotificationPermission>('default');
 
-  // Effect to set initial theme, load notification settings, and check permissions
   useEffect(() => {
     setIsMounted(true);
     const storedTheme = localStorage.getItem('theme') as 'light' | 'dark' | null;
@@ -55,13 +64,19 @@ export default function SettingsPage() {
 
     if ('Notification' in window) {
       setDesktopNotificationPermission(Notification.permission);
-      console.log("Initial Notification.permission:", Notification.permission);
     } else {
       console.warn("Desktop notifications not supported by this browser.");
     }
   }, []);
 
-  // Effect to apply theme and save to localStorage
+  useEffect(() => {
+    if (user) {
+      setCurrentDisplayName(user.displayName || "");
+      setCurrentEmail(user.email || "");
+      setCurrentPhotoURL(user.photoURL || "");
+    }
+  }, [user]);
+
   useEffect(() => {
     if (!isMounted) return;
 
@@ -74,7 +89,6 @@ export default function SettingsPage() {
     }
   }, [theme, isMounted]);
 
-  // Effect to save notification settings to localStorage
   useEffect(() => {
     if (isMounted) {
       localStorage.setItem(NOTIFICATION_SETTINGS_KEY, JSON.stringify(notificationSettings));
@@ -91,27 +105,25 @@ export default function SettingsPage() {
       return;
     }
 
-    console.log("Attempting to change desktop notifications. Current permission:", desktopNotificationPermission, "Requested state:", checked);
-
-    if (checked) { // User wants to enable notifications
+    if (checked) {
       if (desktopNotificationPermission === 'granted') {
         setNotificationSettings(prev => ({ ...prev, desktopEnabled: true }));
         toast({ title: "Preference Saved", description: "Desktop notifications enabled." });
       } else if (desktopNotificationPermission === 'default') {
         const permission = await Notification.requestPermission();
-        setDesktopNotificationPermission(permission); // Update state with new permission
+        setDesktopNotificationPermission(permission);
         if (permission === 'granted') {
           setNotificationSettings(prev => ({ ...prev, desktopEnabled: true }));
           toast({ title: "Success", description: "Desktop notifications enabled." });
         } else {
-          setNotificationSettings(prev => ({ ...prev, desktopEnabled: false })); // Ensure it's off if not granted
+          setNotificationSettings(prev => ({ ...prev, desktopEnabled: false }));
           toast({ title: "Permission Not Granted", description: `Desktop notifications permission was ${permission}. You may need to allow them in browser settings.`, variant: "destructive" });
         }
       } else if (desktopNotificationPermission === 'denied') {
-        setNotificationSettings(prev => ({ ...prev, desktopEnabled: false })); // Ensure it's off
+        setNotificationSettings(prev => ({ ...prev, desktopEnabled: false }));
         toast({ title: "Permission Denied", description: "Desktop notifications are blocked. Please enable them in your browser/OS settings for this site.", variant: "destructive" });
       }
-    } else { // User wants to disable notifications
+    } else {
       setNotificationSettings(prev => ({ ...prev, desktopEnabled: false }));
       toast({ title: "Preference Saved", description: "Desktop notifications disabled." });
     }
@@ -127,8 +139,82 @@ export default function SettingsPage() {
     toast({ title: "Preference Saved", description: `Sound notifications ${checked ? 'enabled' : 'disabled'}.`});
   };
 
-  if (!isMounted) {
-    return null; 
+  const handleSaveProfile = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!user || !auth.currentUser) {
+      toast({ title: "Error", description: "You must be logged in to update your profile.", variant: "destructive" });
+      return;
+    }
+    setIsSavingProfile(true);
+
+    try {
+      const authUpdates: { displayName?: string; photoURL?: string } = {};
+      const firestoreUpdates: { displayName?: string; email?: string; photoURL?: string } = {};
+
+      if (currentDisplayName !== (user.displayName || "")) {
+        authUpdates.displayName = currentDisplayName;
+        firestoreUpdates.displayName = currentDisplayName;
+      }
+      if (currentPhotoURL !== (user.photoURL || "")) {
+        authUpdates.photoURL = currentPhotoURL;
+        firestoreUpdates.photoURL = currentPhotoURL;
+      }
+      if (currentEmail !== (user.email || "")) {
+        // Email update is separate
+        firestoreUpdates.email = currentEmail;
+      }
+      
+      // Update Firebase Auth profile (displayName, photoURL)
+      if (Object.keys(authUpdates).length > 0) {
+        await updateProfile(auth.currentUser, authUpdates);
+      }
+
+      // Update Firebase Auth email (if changed)
+      if (currentEmail !== (user.email || "")) {
+        try {
+          await updateEmail(auth.currentUser, currentEmail);
+        } catch (error: any) {
+          if (error.code === 'auth/requires-recent-login') {
+            toast({
+              title: "Re-authentication Required",
+              description: "Changing your email requires you to sign in again. Please log out and log back in to change your email.",
+              variant: "destructive",
+              duration: 7000,
+            });
+          } else {
+            throw error; // Re-throw other email update errors
+          }
+        }
+      }
+      
+      // Reload user to get fresh data from Auth (important for AuthProvider to sync)
+      await auth.currentUser.reload();
+
+      // Update Firestore document (AuthProvider will also sync, but this ensures immediate reflection if needed)
+      // However, relying on AuthProvider's sync after user.reload() is cleaner.
+      // For this iteration, we ensure AuthProvider picks it up.
+      // If direct Firestore update is needed here, it would be:
+      // const userDocRef = doc(db, "users", user.uid);
+      // await updateDoc(userDocRef, firestoreUpdates);
+
+
+      toast({ title: "Success", description: "Profile updated successfully!" });
+      setIsEditingPhoto(false); // Hide photo URL input after save
+    } catch (error: any) {
+      console.error("Error updating profile:", error);
+      toast({ title: "Error", description: error.message || "Could not update profile.", variant: "destructive" });
+    } finally {
+      setIsSavingProfile(false);
+    }
+  };
+
+
+  if (!isMounted || authLoading) {
+    return (
+        <div className="flex h-full items-center justify-center">
+            <Loader2 className="h-12 w-12 animate-spin text-primary" />
+        </div>
+    ); 
   }
 
   const isDesktopSwitchDisabled = desktopNotificationPermission === 'denied';
@@ -146,33 +232,63 @@ export default function SettingsPage() {
       <div className="grid gap-6 md:grid-cols-3">
         {/* Profile Settings */}
         <Card className="md:col-span-1">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <User className="h-5 w-5" /> Profile
-            </CardTitle>
-            <CardDescription>Update your personal information.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="flex flex-col items-center space-y-2">
-              <CustomAvatar 
-                src={user?.photoURL || undefined} 
-                alt={user?.displayName || user?.email || "User"} 
-                className="h-24 w-24 mb-2" 
-                data-ai-hint="person avatar"
-                fallback={(user?.displayName || user?.email || "U").charAt(0).toUpperCase()}
-              />
-              <Button variant="outline" size="sm" disabled>Change Photo</Button>
-            </div>
-            <div className="space-y-1">
-              <Label htmlFor="displayName">Display Name</Label>
-              <Input id="displayName" defaultValue={user?.displayName || ""} disabled />
-            </div>
-            <div className="space-y-1">
-              <Label htmlFor="email">Email</Label>
-              <Input id="email" type="email" defaultValue={user?.email || ""} disabled />
-            </div>
-            <Button className="w-full" disabled>Save Profile</Button>
-          </CardContent>
+          <form onSubmit={handleSaveProfile}>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <User className="h-5 w-5" /> Profile
+              </CardTitle>
+              <CardDescription>Update your personal information.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex flex-col items-center space-y-2">
+                <CustomAvatar 
+                  src={currentPhotoURL || undefined} 
+                  alt={currentDisplayName || "User"} 
+                  className="h-24 w-24 mb-2" 
+                  data-ai-hint="person avatar"
+                  fallback={(currentDisplayName || "U").charAt(0).toUpperCase()}
+                />
+                <Button type="button" variant="outline" size="sm" onClick={() => setIsEditingPhoto(!isEditingPhoto)}>
+                  {isEditingPhoto ? "Cancel Photo Edit" : "Change Photo"}
+                </Button>
+                {isEditingPhoto && (
+                  <div className="w-full space-y-1">
+                    <Label htmlFor="photoUrl">Photo URL</Label>
+                    <Input 
+                      id="photoUrl" 
+                      type="url" 
+                      placeholder="https://example.com/image.png"
+                      value={currentPhotoURL}
+                      onChange={(e) => setCurrentPhotoURL(e.target.value)} 
+                    />
+                  </div>
+                )}
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="displayName">Display Name</Label>
+                <Input 
+                  id="displayName" 
+                  value={currentDisplayName} 
+                  onChange={(e) => setCurrentDisplayName(e.target.value)} 
+                  required
+                />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="email">Email</Label>
+                <Input 
+                  id="email" 
+                  type="email" 
+                  value={currentEmail} 
+                  onChange={(e) => setCurrentEmail(e.target.value)}
+                  required 
+                />
+              </div>
+              <Button type="submit" className="w-full" disabled={isSavingProfile}>
+                {isSavingProfile && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Save Profile
+              </Button>
+            </CardContent>
+          </form>
         </Card>
 
         {/* Notification Settings */}
@@ -274,4 +390,3 @@ export default function SettingsPage() {
     </div>
   );
 }
-
