@@ -3,7 +3,7 @@
 "use client";
 
 import React, { useState, useEffect, FormEvent } from 'react';
-import { Settings as SettingsIcon, User, Bell, Lock, Palette, Sun, Moon, Loader2 } from "lucide-react";
+import { Settings as SettingsIcon, User, Bell, Lock, Palette, Sun, Moon, Loader2, ShieldAlert, Trash2 } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -12,9 +12,15 @@ import { Switch } from "@/components/ui/switch";
 import { CustomAvatar } from "@/components/common/CustomAvatar";
 import { useAuth } from '@/hooks/useAuth';
 import { useToast } from '@/hooks/use-toast';
-import { auth, db } from '@/lib/firebase'; // Import auth and db
-import { updateProfile, updateEmail } from 'firebase/auth';
-import { doc, updateDoc } from 'firebase/firestore';
+import { auth, db } from '@/lib/firebase';
+import { updateProfile, updateEmail, updatePassword, deleteUser, EmailAuthProvider, reauthenticateWithCredential } from 'firebase/auth';
+import { doc, updateDoc, deleteDoc } from 'firebase/firestore'; // Added deleteDoc
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogClose, DialogTrigger } from '@/components/ui/dialog';
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
+import { useForm, SubmitHandler } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import * as z from "zod";
+import { useRouter } from 'next/navigation';
 
 const NOTIFICATION_SETTINGS_KEY = 'gongoBongoNotificationSettings';
 
@@ -24,9 +30,20 @@ interface NotificationSettings {
   soundEnabled: boolean;
 }
 
+const changePasswordSchema = z.object({
+  newPassword: z.string().min(6, { message: "Password must be at least 6 characters" }),
+  confirmPassword: z.string().min(6, { message: "Password must be at least 6 characters" }),
+}).refine((data) => data.newPassword === data.confirmPassword, {
+  message: "New passwords don't match",
+  path: ["confirmPassword"],
+});
+type ChangePasswordFormInputs = z.infer<typeof changePasswordSchema>;
+
+
 export default function SettingsPage() {
   const { user, loading: authLoading } = useAuth();
   const { toast } = useToast();
+  const router = useRouter();
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
   const [isMounted, setIsMounted] = useState(false);
 
@@ -35,6 +52,15 @@ export default function SettingsPage() {
   const [currentPhotoURL, setCurrentPhotoURL] = useState("");
   const [isEditingPhoto, setIsEditingPhoto] = useState(false);
   const [isSavingProfile, setIsSavingProfile] = useState(false);
+
+  const [openChangePasswordDialog, setOpenChangePasswordDialog] = useState(false);
+  const [isUpdatingPassword, setIsUpdatingPassword] = useState(false);
+  const [isDeletingAccount, setIsDeletingAccount] = useState(false);
+
+
+  const { register: registerPassword, handleSubmit: handleSubmitPassword, formState: { errors: passwordErrors }, reset: resetPasswordForm } = useForm<ChangePasswordFormInputs>({
+    resolver: zodResolver(changePasswordSchema),
+  });
 
 
   const [notificationSettings, setNotificationSettings] = useState<NotificationSettings>({
@@ -112,17 +138,18 @@ export default function SettingsPage() {
         toast({ title: "Preference Saved", description: "Desktop notifications enabled." });
       } else if (desktopNotificationPermission === 'default') {
         const permission = await Notification.requestPermission();
+        console.log("Notification permission request result:", permission);
         setDesktopNotificationPermission(permission);
         if (permission === 'granted') {
           setNotificationSettings(prev => ({ ...prev, desktopEnabled: true }));
           toast({ title: "Success", description: "Desktop notifications enabled." });
         } else {
           setNotificationSettings(prev => ({ ...prev, desktopEnabled: false }));
-          toast({ title: "Permission Not Granted", description: `Desktop notifications permission was ${permission}. You may need to allow them in browser settings.`, variant: "destructive", duration: 5000 });
+          toast({ title: "Permission Not Granted", description: `Desktop notifications permission was ${permission}. You may need to allow them in browser settings.`, variant: "destructive", duration: 7000 });
         }
       } else if (desktopNotificationPermission === 'denied') {
         setNotificationSettings(prev => ({ ...prev, desktopEnabled: false }));
-        toast({ title: "Permission Denied", description: "Desktop notifications are blocked. Please enable them in your browser/OS settings for this site.", variant: "destructive", duration: 7000 });
+        toast({ title: "Permission Denied by Browser", description: "Desktop notifications are blocked by your browser. Please enable them in your browser/OS settings for this site to use this feature.", variant: "destructive", duration: 9000 });
       }
     } else {
       setNotificationSettings(prev => ({ ...prev, desktopEnabled: false }));
@@ -150,8 +177,7 @@ export default function SettingsPage() {
 
     try {
       const authUpdates: { displayName?: string; photoURL?: string } = {};
-      // Firestore updates are handled by AuthProvider after user.reload()
-
+      
       if (currentDisplayName !== (user.displayName || "")) {
         authUpdates.displayName = currentDisplayName;
       }
@@ -159,12 +185,10 @@ export default function SettingsPage() {
         authUpdates.photoURL = currentPhotoURL;
       }
       
-      // Update Firebase Auth profile (displayName, photoURL)
       if (Object.keys(authUpdates).length > 0) {
         await updateProfile(auth.currentUser, authUpdates);
       }
 
-      // Update Firebase Auth email (if changed)
       if (currentEmail !== (user.email || "")) {
         try {
           await updateEmail(auth.currentUser, currentEmail);
@@ -177,9 +201,9 @@ export default function SettingsPage() {
               duration: 7000,
             });
           } else if (error.code === 'auth/operation-not-allowed') {
-            toast({
+             toast({
               title: "Email Update Not Allowed",
-              description: "Could not update email. This may be due to project settings requiring email verification or other restrictions. Please ensure your current email is verified or contact support.",
+              description: error.message || "Could not update email. This may be due to project settings (e.g., email verification needed) or other restrictions.",
               variant: "destructive",
               duration: 9000,
             });
@@ -200,23 +224,79 @@ export default function SettingsPage() {
               duration: 7000,
             });
           }
-           // Do not proceed with other updates if email update fails
           setIsSavingProfile(false);
           return;
         }
       }
       
-      // Reload user to get fresh data from Auth (important for AuthProvider to sync)
       await auth.currentUser.reload();
-      // AuthProvider will pick up the changes from the reloaded user and update Firestore.
-
       toast({ title: "Success", description: "Profile updated successfully!" });
-      setIsEditingPhoto(false); // Hide photo URL input after save
+      setIsEditingPhoto(false); 
     } catch (error: any) {
       console.error("Error updating profile:", error);
       toast({ title: "Error", description: error.message || "Could not update profile.", variant: "destructive" });
     } finally {
       setIsSavingProfile(false);
+    }
+  };
+
+  const onSubmitChangePassword: SubmitHandler<ChangePasswordFormInputs> = async (data) => {
+    if (!auth.currentUser) {
+      toast({ title: "Error", description: "You are not logged in.", variant: "destructive" });
+      return;
+    }
+    setIsUpdatingPassword(true);
+    try {
+      await updatePassword(auth.currentUser, data.newPassword);
+      toast({ title: "Success", description: "Password updated successfully." });
+      setOpenChangePasswordDialog(false);
+      resetPasswordForm();
+    } catch (error: any) {
+      console.error("Error updating password:", error);
+      if (error.code === 'auth/requires-recent-login') {
+        toast({
+          title: "Action Requires Recent Login",
+          description: "For security, please log out and log back in before changing your password.",
+          variant: "destructive",
+          duration: 7000,
+        });
+      } else {
+        toast({ title: "Error", description: error.message || "Could not update password.", variant: "destructive" });
+      }
+    } finally {
+      setIsUpdatingPassword(false);
+    }
+  };
+
+  const handleDeleteAccount = async () => {
+    if (!auth.currentUser) {
+      toast({ title: "Error", description: "You are not logged in.", variant: "destructive" });
+      return;
+    }
+    setIsDeletingAccount(true);
+    try {
+      // Optional: Delete user's Firestore document
+      const userDocRef = doc(db, "users", auth.currentUser.uid);
+      await deleteDoc(userDocRef); // This is optional, depends on your data retention policy
+
+      await deleteUser(auth.currentUser);
+      toast({ title: "Account Deleted", description: "Your account has been successfully deleted." });
+      // AuthProvider and MainAppLayout will handle redirect on auth state change
+      router.push('/login'); // Force redirect
+    } catch (error: any) {
+      console.error("Error deleting account:", error);
+      if (error.code === 'auth/requires-recent-login') {
+        toast({
+          title: "Action Requires Recent Login",
+          description: "For security, please log out and log back in before deleting your account.",
+          variant: "destructive",
+          duration: 7000,
+        });
+      } else {
+        toast({ title: "Error", description: error.message || "Could not delete account.", variant: "destructive" });
+      }
+    } finally {
+      setIsDeletingAccount(false);
     }
   };
 
@@ -319,7 +399,7 @@ export default function SettingsPage() {
                   Receive notifications on your computer.
                 </span>
                  {desktopNotificationPermission === 'denied' && (
-                  <span className="text-xs text-destructive">Permission blocked by browser.</span>
+                  <span className="text-xs text-destructive font-medium">Permission blocked by browser.</span>
                 )}
               </Label>
               <Switch 
@@ -340,6 +420,7 @@ export default function SettingsPage() {
                 id="emailNotifications" 
                 checked={notificationSettings.emailEnabled}
                 onCheckedChange={handleEmailNotificationChange}
+                disabled // Feature not implemented
               />
             </div>
              <div className="flex items-center justify-between">
@@ -393,12 +474,78 @@ export default function SettingsPage() {
             <CardDescription>Manage your account security.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <Button variant="outline" className="w-full" disabled>Change Password</Button>
-            <Button variant="outline" className="w-full" disabled>Two-Factor Authentication</Button>
-            <Button variant="destructive" className="w-full" disabled>Delete Account</Button>
+            <Dialog open={openChangePasswordDialog} onOpenChange={setOpenChangePasswordDialog}>
+              <DialogTrigger asChild>
+                <Button variant="outline" className="w-full">Change Password</Button>
+              </DialogTrigger>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Change Password</DialogTitle>
+                  <DialogDescription>
+                    Enter your new password below. Make sure it's at least 6 characters long.
+                  </DialogDescription>
+                </DialogHeader>
+                <form onSubmit={handleSubmitPassword(onSubmitChangePassword)} className="space-y-4">
+                  <div>
+                    <Label htmlFor="newPassword">New Password</Label>
+                    <Input id="newPassword" type="password" {...registerPassword("newPassword")} />
+                    {passwordErrors.newPassword && <p className="text-sm text-destructive mt-1">{passwordErrors.newPassword.message}</p>}
+                  </div>
+                  <div>
+                    <Label htmlFor="confirmPassword">Confirm New Password</Label>
+                    <Input id="confirmPassword" type="password" {...registerPassword("confirmPassword")} />
+                    {passwordErrors.confirmPassword && <p className="text-sm text-destructive mt-1">{passwordErrors.confirmPassword.message}</p>}
+                  </div>
+                  <DialogFooter>
+                    <DialogClose asChild>
+                      <Button type="button" variant="outline">Cancel</Button>
+                    </DialogClose>
+                    <Button type="submit" disabled={isUpdatingPassword}>
+                      {isUpdatingPassword && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                      Update Password
+                    </Button>
+                  </DialogFooter>
+                </form>
+              </DialogContent>
+            </Dialog>
+
+            <Button variant="outline" className="w-full" disabled>
+              Two-Factor Authentication
+            </Button>
+
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button variant="destructive" className="w-full">
+                  <Trash2 className="mr-2 h-4 w-4" /> Delete Account
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle className="flex items-center gap-2"><ShieldAlert className="h-6 w-6 text-destructive"/>Are you absolutely sure?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    This action cannot be undone. This will permanently delete your account
+                    and remove your data from our servers.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel disabled={isDeletingAccount}>Cancel</AlertDialogCancel>
+                  <AlertDialogAction
+                    onClick={handleDeleteAccount}
+                    disabled={isDeletingAccount}
+                    className="bg-destructive hover:bg-destructive/90 text-destructive-foreground"
+                  >
+                    {isDeletingAccount && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                    Yes, Delete Account
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+
           </CardContent>
         </Card>
       </div>
     </div>
   );
 }
+
+    
