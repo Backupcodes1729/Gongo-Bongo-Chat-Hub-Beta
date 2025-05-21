@@ -63,6 +63,7 @@ export default function SettingsPage() {
     }
 
     if ('Notification' in window) {
+      console.log("Initial Notification.permission:", Notification.permission);
       setDesktopNotificationPermission(Notification.permission);
     } else {
       console.warn("Desktop notifications not supported by this browser.");
@@ -117,11 +118,11 @@ export default function SettingsPage() {
           toast({ title: "Success", description: "Desktop notifications enabled." });
         } else {
           setNotificationSettings(prev => ({ ...prev, desktopEnabled: false }));
-          toast({ title: "Permission Not Granted", description: `Desktop notifications permission was ${permission}. You may need to allow them in browser settings.`, variant: "destructive" });
+          toast({ title: "Permission Not Granted", description: `Desktop notifications permission was ${permission}. You may need to allow them in browser settings.`, variant: "destructive", duration: 5000 });
         }
       } else if (desktopNotificationPermission === 'denied') {
         setNotificationSettings(prev => ({ ...prev, desktopEnabled: false }));
-        toast({ title: "Permission Denied", description: "Desktop notifications are blocked. Please enable them in your browser/OS settings for this site.", variant: "destructive" });
+        toast({ title: "Permission Denied", description: "Desktop notifications are blocked. Please enable them in your browser/OS settings for this site.", variant: "destructive", duration: 7000 });
       }
     } else {
       setNotificationSettings(prev => ({ ...prev, desktopEnabled: false }));
@@ -149,19 +150,13 @@ export default function SettingsPage() {
 
     try {
       const authUpdates: { displayName?: string; photoURL?: string } = {};
-      const firestoreUpdates: { displayName?: string; email?: string; photoURL?: string } = {};
+      // Firestore updates are handled by AuthProvider after user.reload()
 
       if (currentDisplayName !== (user.displayName || "")) {
         authUpdates.displayName = currentDisplayName;
-        firestoreUpdates.displayName = currentDisplayName;
       }
       if (currentPhotoURL !== (user.photoURL || "")) {
         authUpdates.photoURL = currentPhotoURL;
-        firestoreUpdates.photoURL = currentPhotoURL;
-      }
-      if (currentEmail !== (user.email || "")) {
-        // Email update is separate
-        firestoreUpdates.email = currentEmail;
       }
       
       // Update Firebase Auth profile (displayName, photoURL)
@@ -181,22 +176,39 @@ export default function SettingsPage() {
               variant: "destructive",
               duration: 7000,
             });
-          } else {
-            throw error; // Re-throw other email update errors
+          } else if (error.code === 'auth/operation-not-allowed') {
+            toast({
+              title: "Email Update Not Allowed",
+              description: "Could not update email. This may be due to project settings requiring email verification or other restrictions. Please ensure your current email is verified or contact support.",
+              variant: "destructive",
+              duration: 9000,
+            });
+          } else if (error.code === 'auth/invalid-email') {
+             toast({
+              title: "Invalid Email",
+              description: "The new email address is not valid.",
+              variant: "destructive",
+              duration: 5000,
+            });
           }
+          else {
+            console.error("Error updating email in Auth:", error);
+            toast({
+              title: "Email Update Error",
+              description: error.message || "An unexpected error occurred while updating your email.",
+              variant: "destructive",
+              duration: 7000,
+            });
+          }
+           // Do not proceed with other updates if email update fails
+          setIsSavingProfile(false);
+          return;
         }
       }
       
       // Reload user to get fresh data from Auth (important for AuthProvider to sync)
       await auth.currentUser.reload();
-
-      // Update Firestore document (AuthProvider will also sync, but this ensures immediate reflection if needed)
-      // However, relying on AuthProvider's sync after user.reload() is cleaner.
-      // For this iteration, we ensure AuthProvider picks it up.
-      // If direct Firestore update is needed here, it would be:
-      // const userDocRef = doc(db, "users", user.uid);
-      // await updateDoc(userDocRef, firestoreUpdates);
-
+      // AuthProvider will pick up the changes from the reloaded user and update Firestore.
 
       toast({ title: "Success", description: "Profile updated successfully!" });
       setIsEditingPhoto(false); // Hide photo URL input after save
@@ -307,7 +319,7 @@ export default function SettingsPage() {
                   Receive notifications on your computer.
                 </span>
                  {desktopNotificationPermission === 'denied' && (
-                  <span className="text-xs text-destructive">Permission blocked in browser.</span>
+                  <span className="text-xs text-destructive">Permission blocked by browser.</span>
                 )}
               </Label>
               <Switch 
