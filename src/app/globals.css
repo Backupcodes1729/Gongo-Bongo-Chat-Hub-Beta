@@ -134,41 +134,41 @@ body {
 
 @layer components {
   .flame {
-    @apply absolute bottom-[20%] left-1/2 rounded-full opacity-0;
-    /* transform-origin: bottom center; */ /* Default for scaleY */
+    @apply absolute bottom-[5%] left-1/2 rounded-full opacity-0; /* Adjusted bottom */
+    transform-origin: bottom center;
     filter: blur(var(--flame-blur));
-    /* z-index: 5; Ensures flames are behind the main logo if logo has z-10 */
+    /* z-index: 5; */ /* Logo has z-10 if needed */
   }
   .flame-style-1 {
-    @apply w-5 h-10 sm:w-6 sm:h-12;
+    @apply w-4 h-8 sm:w-5 sm:h-10; /* Slightly smaller */
     background-color: var(--flame-color-1);
   }
   .flame-style-2 {
-    @apply w-6 h-12 sm:w-8 sm:h-16;
-    background-color: var(--flame-color-2);
-  }
-  .flame-style-3 {
-    @apply w-4 h-8 sm:w-5 sm:h-10;
-    background-color: var(--flame-color-3);
-  }
-  .flame-style-4 {
     @apply w-5 h-10 sm:w-6 sm:h-12;
     background-color: var(--flame-color-2);
   }
+  .flame-style-3 {
+    @apply w-3 h-6 sm:w-4 sm:h-8;
+    background-color: var(--flame-color-3);
+  }
+  .flame-style-4 {
+    @apply w-4 h-8 sm:w-5 sm:h-10;
+    background-color: var(--flame-color-2);
+  }
   .flame-style-5 {
-    @apply w-6 h-12 sm:w-7 sm:h-14;
+    @apply w-5 h-10 sm:w-6 sm:h-12;
     background-color: var(--flame-color-1);
   }
 
   .animation-flame-out-1 {
-    animation: flame-out-up-1 2s ease-out infinite;
+    animation: flame-out-up-1 2.2s ease-out infinite; /* Slightly longer */
   }
   .animation-flame-out-2 {
-    animation: flame-out-up-2 2.2s ease-out infinite;
+    animation: flame-out-up-2 2.4s ease-out infinite;
     animation-delay: 0.3s;
   }
   .animation-flame-out-3 {
-    animation: flame-out-up-3 1.8s ease-out infinite;
+    animation: flame-out-up-3 2s ease-out infinite;
     animation-delay: 0.6s;
   }
   .animation-delay-sm {
@@ -182,16 +182,16 @@ body {
 
 @layer utilities {
   .animate-soft-pulse {
-    animation: soft-pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+    animation: soft-pulse 2.5s cubic-bezier(0.4, 0, 0.6, 1) infinite; /* More subtle */
   }
   @keyframes soft-pulse {
     0%, 100% {
-      opacity: 1;
+      opacity: 0.9; /* Less drastic opacity change */
       transform: scale(1);
     }
     50% {
       opacity: 0.7;
-      transform: scale(1.05);
+      transform: scale(1.03); /* Less drastic scale */
     }
   }
 
@@ -211,56 +211,81 @@ body {
     animation-delay: 0.4s;
   }
 
-  /* Flame Animations */
+  /* Flame Animations - Refined */
   @keyframes flame-out-up-1 {
     0% {
       opacity: 0;
-      transform: translate(-50%, 10%) scaleY(0.3) scaleX(0.5) rotate(-15deg);
-    }
-    20% {
-      opacity: 0.7;
-    }
-    80% {
-      opacity: 0.2;
-      transform: translate(-70%, -120%) scaleY(1.2) scaleX(0.8) rotate(-25deg);
-    }
-    100% {
-      opacity: 0;
-      transform: translate(-80%, -150%) scaleY(0.5) scaleX(0.3) rotate(-30deg);
-    }
-  }
-  @keyframes flame-out-up-2 { /* Central, more straight flame */
-    0% {
-      opacity: 0;
-      transform: translate(-50%, 5%) scaleY(0.2) scaleX(0.6);
-    }
-    20% {
-      opacity: 0.8;
-    }
-    80% {
-      opacity: 0.3;
-      transform: translate(-50%, -130%) scaleY(1.3) scaleX(1);
-    }
-    100% {
-      opacity: 0;
-      transform: translate(-50%, -160%) scaleY(0.6) scaleX(0.4);
-    }
-  }
-  @keyframes flame-out-up-3 {
-    0% {
-      opacity: 0;
-      transform: translate(-30%, 10%) scaleY(0.3) scaleX(0.5) rotate(15deg);
+      transform: translate(-50%, 10%) scaleY(0.3) scaleX(0.5) rotate(-10deg);
     }
     20% {
       opacity: 0.6;
     }
     80% {
       opacity: 0.1;
-      transform: translate(0%, -110%) scaleY(1.1) scaleX(0.7) rotate(25deg);
+      transform: translate(-60%, -100%) scaleY(1) scaleX(0.7) rotate(-15deg);
     }
     100% {
       opacity: 0;
-      transform: translate(10%, -140%) scaleY(0.4) scaleX(0.2) rotate(30deg);
+      transform: translate(-70%, -120%) scaleY(0.4) scaleX(0.2) rotate(-20deg);
     }
   }
+  @keyframes flame-out-up-2 {
+    0% {
+      opacity: 0;
+      transform: translate(-50%, 5%) scaleY(0.2) scaleX(0.6);
+    }
+    20% {
+      opacity: 0.7;
+    }
+    80% {
+      opacity: 0.2;
+      transform: translate(-50%, -110%) scaleY(1.1) scaleX(0.9);
+    }
+    100% {
+      opacity: 0;
+      transform: translate(-50%, -130%) scaleY(0.5) scaleX(0.3);
+    }
+  }
+  @keyframes flame-out-up-3 {
+    0% {
+      opacity: 0;
+      transform: translate(-30%, 10%) scaleY(0.3) scaleX(0.5) rotate(10deg);
+    }
+    20% {
+      opacity: 0.5;
+    }
+    80% {
+      opacity: 0.1;
+      transform: translate(-10%, -90%) scaleY(1) scaleX(0.6) rotate(15deg);
+    }
+    100% {
+      opacity: 0;
+      transform: translate(0%, -110%) scaleY(0.3) scaleX(0.1) rotate(20deg);
+    }
+  }
+
+  /* Animated Dots for Bot Typing */
+  @keyframes pulse-dot {
+    0%, 100% {
+      opacity: 0.3;
+      transform: scale(0.9);
+    }
+    50% {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+  .animate-pulse-dot {
+    animation: pulse-dot 1.4s infinite ease-in-out;
+  }
+  .dot-delay-1 {
+    animation-delay: 0s;
+  }
+  .dot-delay-2 {
+    animation-delay: 0.2s;
+  }
+  .dot-delay-3 {
+    animation-delay: 0.4s;
+  }
 }
+

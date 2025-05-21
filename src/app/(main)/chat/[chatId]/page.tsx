@@ -63,7 +63,7 @@ export default function IndividualChatPage() {
   const [replyingToMessage, setReplyingToMessage] = useState<ChatMessage | null>(null);
   const [aiSuggestions, setAiSuggestions] = useState<string[]>([]);
   const [loadingAiSuggestions, setLoadingAiSuggestions] = useState(false);
-  const [isBotChatting, setIsBotChatting] = useState(false); // For bot typing indicator
+  const [isBotChatting, setIsBotChatting] = useState(false); 
 
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -87,7 +87,7 @@ export default function IndividualChatPage() {
     }
     setLoadingChat(true);
     const chatDocRef = doc(db, "chats", chatId);
-    let unsubscribePartnerFirestore: Unsubscribe | null = null;
+    let unsubscribePartnerFirestore: (() => void) | null = null;
 
     const unsubscribeChatDetails = onSnapshot(chatDocRef, async (docSnap) => {
       if (docSnap.exists()) {
@@ -98,7 +98,7 @@ export default function IndividualChatPage() {
         if (partnerId) {
           const userDocRef = doc(db, "users", partnerId);
           if (unsubscribePartnerFirestore) {
-            unsubscribePartnerFirestore(); // Clean up previous listener
+            unsubscribePartnerFirestore(); 
             unsubscribePartnerFirestore = null;
           }
           unsubscribePartnerFirestore = onSnapshot(userDocRef, (userSnap) => {
@@ -107,7 +107,6 @@ export default function IndividualChatPage() {
             } else {
               setChatPartner(null);
             }
-             // setLoadingChat(false) should ideally be called after all initial data is potentially fetched
           });
         } else {
            if (unsubscribePartnerFirestore) {
@@ -124,7 +123,7 @@ export default function IndividualChatPage() {
           unsubscribePartnerFirestore = null;
         }
       }
-      setLoadingChat(false); // Moved here to ensure it's called after initial chat details are processed
+      setLoadingChat(false); 
     }, (error) => {
       console.error("Error fetching chat details (Firestore):", error);
       setChatDetails(null);
@@ -205,7 +204,7 @@ export default function IndividualChatPage() {
   }, [chatId, currentUser?.uid]);
 
   useEffect(() => {
-    if (!currentUser || !messages.length || !chatDetails ) { // Removed isCurrentChatWithBot condition here
+    if (!currentUser || !messages.length || !chatDetails ) { 
       previousMessagesRef.current = [...messages];
       return;
     }
@@ -256,11 +255,21 @@ export default function IndividualChatPage() {
     e.preventDefault();
     if (newMessage.trim() === "" || !currentUser || !chatDetails) return;
 
-    const isRequestInitiator = chatDetails.status === 'pending' && chatDetails.initiatedBy === currentUser.uid;
-    const initiatorHasSentMessage = messages.some(msg => msg.senderId === currentUser.uid);
-    const canSendInitialRequestMessage = isRequestInitiator && !initiatorHasSentMessage;
+    const isRequestInitiatorCheck = chatDetails.status === 'pending' && chatDetails.initiatedBy === currentUser.uid;
+    const initiatorHasSentInitialMessageCheck = messages.some(msg => msg.senderId === currentUser.uid);
+    
+    // Allow sending if:
+    // 1. Chat is accepted OR
+    // 2. It's a bot chat OR
+    // 3. It's a pending chat initiated by the current user AND they haven't sent their initial message yet.
+    const canActuallySend = chatDetails.status === 'accepted' || isCurrentChatWithBot || 
+                           (isRequestInitiatorCheck && !initiatorHasSentInitialMessageCheck);
 
-    if (chatDetails.status !== 'accepted' && !canSendInitialRequestMessage && !isCurrentChatWithBot) return;
+    if (!canActuallySend) {
+        toast({ title: "Cannot Send", description: "Message cannot be sent in the current chat state.", variant: "destructive" });
+        return;
+    }
+
 
     setSendingMessage(true);
 
@@ -302,7 +311,7 @@ export default function IndividualChatPage() {
 
       const userMessageText = newMessage; 
       setNewMessage("");
-      handleSetReplyingToMessage(null); // Clear reply state and suggestions
+      handleSetReplyingToMessage(null); 
 
       if (isCurrentChatWithBot && chatPartner) {
         setIsBotChatting(true);
@@ -340,6 +349,7 @@ export default function IndividualChatPage() {
             senderDisplayName: chatPartner.displayName || GEMINI_BOT_NAME,
           };
           await addDoc(messagesColRef, errorBotMessage);
+           toast({ title: "Bot Error", description: "Could not get response from Gemini Bot.", variant: "destructive" });
         } finally {
           setIsBotChatting(false);
         }
@@ -356,7 +366,7 @@ export default function IndividualChatPage() {
 
   const handleSetReplyingToMessage = (message: ChatMessage | null) => {
     setReplyingToMessage(message);
-    if (message) { // Fetch AI suggestions if a message is selected for reply, regardless of bot chat
+    if (message) { 
       fetchAiSuggestions(message.text);
       inputRef.current?.focus();
     } else {
@@ -375,6 +385,7 @@ export default function IndividualChatPage() {
         updatedAt: serverTimestamp(),
       });
       setChatDetails(prev => prev ? { ...prev, status: 'accepted' } : null);
+      toast({ title: "Invitation Accepted!", description: "You can now chat." });
     } catch (error) {
       console.error("Error accepting chat request:", error);
       toast({ title: "Error", description: "Could not accept request.", variant: "destructive" });
@@ -426,6 +437,8 @@ export default function IndividualChatPage() {
   const isChatAccepted = chatDetails.status === 'accepted' || isCurrentChatWithBot; 
 
   const initiatorHasSentInitialMessage = isRequestInitiator && messages.some(msg => msg.senderId === currentUser?.uid);
+  
+  // Determine if the message input section should be shown
   const showMessageInput = isChatAccepted || (isRequestInitiator && !initiatorHasSentInitialMessage);
   const inputPlaceholder = (isRequestInitiator && !initiatorHasSentInitialMessage) ? "Send an invitation message..." : "Type a message...";
 
@@ -530,7 +543,11 @@ export default function IndividualChatPage() {
             <div className="flex items-end gap-2 justify-start">
               <CustomAvatar src={chatPartner?.photoURL || GEMINI_BOT_AVATAR_URL} alt={GEMINI_BOT_NAME} fallback={GEMINI_BOT_NAME.charAt(0)} className="h-8 w-8" data-ai-hint="robot bot"/>
               <div className="bg-card text-card-foreground rounded-xl rounded-br-none border p-3 shadow">
-                <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                <div className="flex items-center space-x-1">
+                  <div className="h-2 w-2 bg-muted-foreground rounded-full animate-pulse-dot dot-delay-1"></div>
+                  <div className="h-2 w-2 bg-muted-foreground rounded-full animate-pulse-dot dot-delay-2"></div>
+                  <div className="h-2 w-2 bg-muted-foreground rounded-full animate-pulse-dot dot-delay-3"></div>
+                </div>
               </div>
             </div>
           )}
@@ -619,10 +636,10 @@ export default function IndividualChatPage() {
                   }}
                   className="flex-1 bg-background focus:bg-background/90"
                   autoComplete="off"
-                  disabled={sendingMessage}
+                  disabled={sendingMessage || (isRequestInitiator && initiatorHasSentInitialMessage)}
                 />
                 {newMessage.trim() && !sendingMessage ? (
-                  <Button type="submit" size="icon" className="bg-primary hover:bg-primary/90">
+                  <Button type="submit" size="icon" className="bg-primary hover:bg-primary/90" disabled={(isRequestInitiator && initiatorHasSentInitialMessage)}>
                     <SendHorizonal className="h-5 w-5 text-primary-foreground" />
                   </Button>
                 ) : sendingMessage ? (
@@ -630,7 +647,7 @@ export default function IndividualChatPage() {
                       <Loader2 className="h-5 w-5 animate-spin text-primary-foreground" />
                   </Button>
                 ) : (
-                  <Button type="button" variant="ghost" size="icon" className="text-muted-foreground hover:text-primary" disabled={sendingMessage || isCurrentChatWithBot}>
+                  <Button type="button" variant="ghost" size="icon" className="text-muted-foreground hover:text-primary" disabled={sendingMessage || isCurrentChatWithBot || (isRequestInitiator && initiatorHasSentInitialMessage)}>
                     <Mic className="h-5 w-5" />
                   </Button>
                 )}
