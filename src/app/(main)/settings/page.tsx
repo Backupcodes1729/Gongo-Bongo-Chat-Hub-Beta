@@ -203,8 +203,6 @@ export default function SettingsPage() {
           await updateEmail(auth.currentUser, currentEmail);
         } catch (error: any) {
           if (error.code === 'auth/requires-recent-login') {
-            // This case should ideally trigger re-authentication if email change is critical.
-            // For now, it informs the user. A full re-auth flow for email change can be complex.
             toast({
               title: "Re-authentication Required for Email Change",
               description: "Changing your email requires recent login. Please log out and log back in, then try again or contact support if the issue persists.",
@@ -236,11 +234,11 @@ export default function SettingsPage() {
             });
           }
           setIsSavingProfile(false);
-          return; // Prevent further processing if email update fails
+          return; 
         }
       }
       
-      await auth.currentUser.reload(); // Reload to get fresh profile data
+      await auth.currentUser.reload(); 
       toast({ title: "Success", description: "Profile updated successfully!" });
       setIsEditingPhoto(false); 
     } catch (error: any) {
@@ -263,7 +261,6 @@ export default function SettingsPage() {
       setOpenChangePasswordDialog(false);
       resetPasswordForm();
     } catch (error: any) {
-      console.error("Error updating password:", error);
       if (error.code === 'auth/requires-recent-login') {
         setNewPasswordForReauth(data.newPassword);
         setPendingAction('changePassword');
@@ -271,6 +268,7 @@ export default function SettingsPage() {
         setOpenChangePasswordDialog(false); // Close current dialog
         setShowReauthDialog(true);
       } else {
+        console.error("Error updating password:", error); // Log other errors
         toast({ title: "Error", description: error.message || "Could not update password.", variant: "destructive" });
       }
     } finally {
@@ -285,7 +283,6 @@ export default function SettingsPage() {
     }
     setIsDeletingAccount(true);
     try {
-      // Optional: Delete user's Firestore document
       const userDocRef = doc(db, "users", auth.currentUser.uid);
       await deleteDoc(userDocRef); 
 
@@ -293,12 +290,12 @@ export default function SettingsPage() {
       toast({ title: "Account Deleted", description: "Your account has been successfully deleted." });
       router.push('/login'); 
     } catch (error: any) {
-      console.error("Error deleting account:", error);
       if (error.code === 'auth/requires-recent-login') {
         setPendingAction('deleteAccount');
         setReauthReasonMessage("To delete your account, please re-enter your current password to continue.");
         setShowReauthDialog(true);
       } else {
+        console.error("Error deleting account:", error); // Log other errors
         toast({ title: "Error", description: error.message || "Could not delete account.", variant: "destructive" });
       }
     } finally {
@@ -319,18 +316,15 @@ export default function SettingsPage() {
       const credential = EmailAuthProvider.credential(auth.currentUser.email!, currentPasswordInput);
       await reauthenticateWithCredential(auth.currentUser, credential);
       
-      // Re-authentication successful, now perform the pending action
       setShowReauthDialog(false);
-      setCurrentPasswordInput(""); // Clear password input
+      setCurrentPasswordInput("");
 
       if (pendingAction === 'changePassword' && newPasswordForReauth) {
         await updatePassword(auth.currentUser, newPasswordForReauth);
         toast({ title: "Success", description: "Password updated successfully." });
         resetPasswordForm(); 
       } else if (pendingAction === 'deleteAccount') {
-        // Optional: Delete user's Firestore document (if not done before reauth attempt)
-        // const userDocRef = doc(db, "users", auth.currentUser.uid);
-        // await deleteDoc(userDocRef);
+        // Firestore doc already deleted in attemptDeleteAccount before reauth was triggered
         await deleteUser(auth.currentUser);
         toast({ title: "Account Deleted", description: "Your account has been successfully deleted." });
         router.push('/login');
@@ -341,8 +335,12 @@ export default function SettingsPage() {
       setReauthError(error.message || "Failed to re-authenticate. Please check your password.");
     } finally {
       setReauthLoading(false);
-      setPendingAction(null);
-      setNewPasswordForReauth(null);
+      // Only reset pendingAction if reauth was successful or dialog is explicitly closed
+      // If reauth fails, user might want to try again, so keep pendingAction.
+      if (!reauthError && !showReauthDialog) { // Check if dialog is not shown (meaning reauth success or cancel)
+         setPendingAction(null);
+         setNewPasswordForReauth(null);
+      }
     }
   };
 
@@ -576,7 +574,7 @@ export default function SettingsPage() {
                 <AlertDialogFooter>
                   <AlertDialogCancel disabled={isDeletingAccount}>Cancel</AlertDialogCancel>
                   <AlertDialogAction
-                    onClick={attemptDeleteAccount} // Changed from handleDeleteAccount
+                    onClick={attemptDeleteAccount} 
                     disabled={isDeletingAccount}
                     className="bg-destructive hover:bg-destructive/90 text-destructive-foreground"
                   >
@@ -592,11 +590,11 @@ export default function SettingsPage() {
 
       {/* Re-authentication Dialog */}
       <Dialog open={showReauthDialog} onOpenChange={(isOpen) => {
-        if (!isOpen) {
+        if (!isOpen) { // When dialog is closed by any means (X, Cancel, or successful reauth)
           setShowReauthDialog(false);
           setCurrentPasswordInput("");
           setReauthError(null);
-          setPendingAction(null);
+          setPendingAction(null); 
           setNewPasswordForReauth(null);
         } else {
           setShowReauthDialog(true);
@@ -623,11 +621,7 @@ export default function SettingsPage() {
             </div>
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => {
-                 setShowReauthDialog(false); 
-                 setCurrentPasswordInput(""); 
-                 setReauthError(null);
-                 setPendingAction(null);
-                 setNewPasswordForReauth(null);
+                 setShowReauthDialog(false); // This will trigger onOpenChange logic to reset states
               }}>Cancel</Button>
               <Button type="submit" disabled={reauthLoading}>
                 {reauthLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
