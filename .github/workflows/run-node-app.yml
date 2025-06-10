@@ -57,38 +57,38 @@ jobs:
         run: |
           pip install --quiet secure-smtplib email-validator
           echo "
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-import smtplib
-import os
-
-user = os.environ['GMAIL_USER']
-password = os.environ['GMAIL_PASS']
-to_emails = os.environ['EMAIL_RECIPIENTS'].split(',')
-public_url = os.environ['NGROK_URL']
-
-html = f\"\"\"
-<html>
-  <body style='font-family: sans-serif;'>
-    <h2>🚀 Your Node.js App Is Live!</h2>
-    <p>You can access it at:</p>
-    <p><a href='{public_url}' style='font-size:18px; color:#007bff'>{public_url}</a></p>
-    <hr>
-    <p style='font-size:12px; color:gray'>This is an automated message from your GitHub Actions workflow.</p>
-  </body>
-</html>
-\"\"\"
-
-msg = MIMEMultipart('alternative')
-msg['Subject'] = '🌐 Your Node.js App is Now Public!'
-msg['From'] = user
-msg['To'] = ', '.join(to_emails)
-
-msg.attach(MIMEText(html, 'html'))
-
-with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
-    server.login(user, password)
-    server.sendmail(user, to_emails, msg.as_string())
+          from email.mime.text import MIMEText
+          from email.mime.multipart import MIMEMultipart
+          import smtplib
+          import os
+          
+          user = os.environ['GMAIL_USER']
+          password = os.environ['GMAIL_PASS']
+          to_emails = os.environ['EMAIL_RECIPIENTS'].split(',')
+          public_url = os.environ['NGROK_URL']
+          
+          html = f\"\"\"
+          <html>
+            <body style='font-family: sans-serif;'>
+              <h2>🚀 Your Node.js App Is Live!</h2>
+              <p>You can access it at:</p>
+              <p><a href='{public_url}' style='font-size:18px; color:#007bff'>{public_url}</a></p>
+              <hr>
+              <p style='font-size:12px; color:gray'>This is an automated message from your GitHub Actions workflow.</p>
+            </body>
+          </html>
+          \"\"\"
+          
+          msg = MIMEMultipart('alternative')
+          msg['Subject'] = '🌐 Your Node.js App is Now Public!'
+          msg['From'] = user
+          msg['To'] = ', '.join(to_emails)
+          
+          msg.attach(MIMEText(html, 'html'))
+          
+          with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
+              server.login(user, password)
+              server.sendmail(user, to_emails, msg.as_string())
           " > send_email.py
           python3 send_email.py
         env:
